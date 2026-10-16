@@ -1,0 +1,186 @@
+{
+  "name": "Huntd - Funding Signals",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 24, "triggerAtHour": 9 }]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule: Daily 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name FROM global_companies WHERE is_active = true ORDER BY name"
+      },
+      "id": "fetch-companies",
+      "name": "Fetch Active Companies",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [450, 400],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/news",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ q: '\"' + $json.name + '\" funding OR raised OR series OR seed OR valuation', num: 10, tbs: 'qdr:w' }) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "search-news",
+      "name": "Search Funding News (Serper)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "serper-header-auth",
+          "name": "Serper API (Header Auth)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst companies = $('Fetch Active Companies').all();\nconst results = [];\n\nconst FUNDING_KEYWORDS = [\n  'funding', 'raised', 'raises', 'series', 'seed', 'pre-seed',\n  'round', 'valuation', 'investment', 'venture', 'capital',\n  'million', 'billion', '$'\n];\n\nfunction parseRelativeDate(str) {\n  if (!str) return new Date().toISOString();\n  const now = new Date();\n  const match = str.match(/(\\d+)\\s+(second|minute|hour|day|week|month|year)s?\\s+ago/i);\n  if (!match) return now.toISOString();\n  \n  const [, num, unit] = match;\n  const val = parseInt(num, 10);\n  \n  if (unit.startsWith('second')) now.setSeconds(now.getSeconds() - val);\n  else if (unit.startsWith('minute')) now.setMinutes(now.getMinutes() - val);\n  else if (unit.startsWith('hour')) now.setHours(now.getHours() - val);\n  else if (unit.startsWith('day')) now.setDate(now.getDate() - val);\n  else if (unit.startsWith('week')) now.setDate(now.getDate() - val * 7);\n  else if (unit.startsWith('month')) now.setMonth(now.getMonth() - val);\n  else if (unit.startsWith('year')) now.setFullYear(now.getFullYear() - val);\n  \n  return now.toISOString();\n}\n\nfor (let i = 0; i < items.length; i++) {\n  const response = items[i].json;\n  const company = companies[i]?.json || {};\n  const newsItems = response.news || [];\n  \n  for (const article of newsItems) {\n    const text = `${article.title || ''} ${article.snippet || ''}`.toLowerCase();\n    const hasFunding = FUNDING_KEYWORDS.some(kw => text.includes(kw));\n    if (!hasFunding) continue;\n    \n    const amountMatch = text.match(/\\$([\\d.]+)\\s?(m|million|b|billion)/i);\n    const roundMatch = text.match(/(series\\s?[a-f]|seed|pre-seed)/i);\n    \n    results.push({\n      json: {\n        company_id: company.id,\n        company_name: company.name,\n        article_title: article.title || '',\n        article_url: article.link || '',\n        source: article.source || '',\n        pub_date: parseRelativeDate(article.date),\n        amount: amountMatch ? `$${amountMatch[1]}${amountMatch[2].charAt(0).toUpperCase()}` : 'undisclosed',\n        round: roundMatch ? roundMatch[1] : 'funding round',\n        raw_summary: `${article.title}. ${(article.snippet || '').substring(0, 400)}`\n      }\n    });\n  }\n}\n\nreturn results;"
+      },
+      "id": "filter-normalize",
+      "name": "Filter & Normalize Articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": { "reset": false }
+      },
+      "id": "split-signals",
+      "name": "Split for Signal Processing",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as count FROM funding_signals WHERE company_id = $1::uuid AND article_url = $2",
+        "options": {
+          "queryReplacement": "={{ [$('Split for Signal Processing').item.json.company_id, $('Split for Signal Processing').item.json.article_url].join(',') }}"
+        }
+      },
+      "id": "check-duplicate",
+      "name": "Check Duplicate Signal",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1250, 400],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.count }}", "operation": "equals", "value2": "0" }]
+        }
+      },
+      "id": "is-new",
+      "name": "Is New Signal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const signal = $('Split for Signal Processing').item.json;\nreturn [{ json: {\n  company_id: signal.company_id,\n  company_name: signal.company_name,\n  article_title: signal.article_title,\n  article_url: signal.article_url,\n  source: signal.source,\n  pub_date: signal.pub_date,\n  amount: signal.amount,\n  round: signal.round,\n  raw_summary: signal.raw_summary\n}}];"
+      },
+      "id": "build-record",
+      "name": "Build Signal Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": { "value": "public", "mode": "list" },
+        "table": { "value": "funding_signals", "mode": "list" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "company_id": "={{ $json.company_id }}",
+            "company_name": "={{ $json.company_name }}",
+            "article_title": "={{ $json.article_title }}",
+            "article_url": "={{ $json.article_url }}",
+            "source": "={{ $json.source }}",
+            "pub_date": "={{ $json.pub_date }}",
+            "amount": "={{ $json.amount }}",
+            "round": "={{ $json.round }}",
+            "raw_summary": "={{ $json.raw_summary }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "company_id", "displayName": "company_id", "required": false, "defaultMatch": false, "display": true, "type": "uuid", "canBeUsedToMatch": true },
+            { "id": "company_name", "displayName": "company_name", "required": false, "defaultMatch": false, "display": true, "type": "text", "canBeUsedToMatch": false },
+            { "id": "article_title", "displayName": "article_title", "required": false, "defaultMatch": false, "display": true, "type": "text", "canBeUsedToMatch": false },
+            { "id": "article_url", "displayName": "article_url", "required": false, "defaultMatch": false, "display": true, "type": "text", "canBeUsedToMatch": false },
+            { "id": "source", "displayName": "source", "required": false, "defaultMatch": false, "display": true, "type": "text", "canBeUsedToMatch": false },
+            { "id": "pub_date", "displayName": "pub_date", "required": false, "defaultMatch": false, "display": true, "type": "timestamp with time zone", "canBeUsedToMatch": false },
+            { "id": "amount", "displayName": "amount", "required": false, "defaultMatch": false, "display": true, "type": "text", "canBeUsedToMatch": false },
+            { "id": "round", "displayName": "round", "required": false, "defaultMatch": false, "display": true, "type": "text", "canBeUsedToMatch": false },
+            { "id": "raw_summary", "displayName": "raw_summary", "required": false, "defaultMatch": false, "display": true, "type": "text", "canBeUsedToMatch": false }
+          ]
+        },
+        "options": {}
+      },
+      "id": "insert-signal",
+      "name": "Insert Signal to Supabase",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1850, 300],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    }
+  ],
+  "connections": {
+    "Schedule: Daily 9am": { "main": [[{ "node": "Fetch Active Companies", "type": "main", "index": 0 }]] },
+    "Manual Trigger": { "main": [[{ "node": "Fetch Active Companies", "type": "main", "index": 0 }]] },
+    "Fetch Active Companies": { "main": [[{ "node": "Search Funding News (Serper)", "type": "main", "index": 0 }]] },
+    "Search Funding News (Serper)": { "main": [[{ "node": "Filter & Normalize Articles", "type": "main", "index": 0 }]] },
+    "Filter & Normalize Articles": { "main": [[{ "node": "Split for Signal Processing", "type": "main", "index": 0 }]] },
+    "Split for Signal Processing": {
+      "main": [
+        [],
+        [{ "node": "Check Duplicate Signal", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Duplicate Signal": { "main": [[{ "node": "Is New Signal?", "type": "main", "index": 0 }]] },
+    "Is New Signal?": {
+      "main": [
+        [{ "node": "Build Signal Record", "type": "main", "index": 0 }],
+        [{ "node": "Split for Signal Processing", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Signal Record": { "main": [[{ "node": "Insert Signal to Supabase", "type": "main", "index": 0 }]] },
+    "Insert Signal to Supabase": { "main": [[{ "node": "Split for Signal Processing", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false
+}

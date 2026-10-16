@@ -1,0 +1,28 @@
+{
+  "companies": [
+    {
+      "id": "figma",
+      "name": "Figma",
+      "domain": "figma.com",
+      "ats": "greenhouse",
+      "slug": "figma",
+      "tags": ["design", "collaboration"]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "domain": "anthropic.com",
+      "ats": "greenhouse",
+      "slug": "anthropic",
+      "tags": ["ai", "safety"]
+    }
+  ],
+  "keywords": [
+    "devops", "devsecops", "sre", "site reliability",
+    "security engineer", "cloud security", "appsec", "application security",
+    "soc2", "soc 2", "hipaa", "compliance", "gdpr",
+    "infrastructure", "platform engineer", "ciso", "chief security",
+    "head of security", "vp of engineering", "director of infrastructure",
+    "vault", "terraform", "kubernetes", "zero trust"
+  ]
+}

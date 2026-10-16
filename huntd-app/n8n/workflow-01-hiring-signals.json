@@ -1,0 +1,277 @@
+{
+  "name": "Huntd - Hiring Signals (Two-Stage)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 24, "triggerAtHour": 8 }]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule: Daily 8am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, domain, ats_platforms, ats_slug FROM global_companies WHERE is_active = true AND array_length(ats_platforms, 1) > 0 AND ats_slug IS NOT NULL ORDER BY name"
+      },
+      "id": "fetch-companies",
+      "name": "Fetch Active Companies",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [450, 400],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst expanded = [];\nfor (const item of items) {\n  const company = item.json;\n  const platforms = company.ats_platforms || [];\n  for (const platform of platforms) {\n    expanded.push({ json: { company_id: company.id, company_name: company.name, company_domain: company.domain, ats_slug: company.ats_slug, ats_platform: platform } });\n  }\n}\nreturn expanded;"
+      },
+      "id": "expand-platforms",
+      "name": "Expand ATS Platforms",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.ats_platform }}",
+                    "rightValue": "greenhouse",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "greenhouse"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.ats_platform }}",
+                    "rightValue": "ashby",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ashby"
+            }
+          ]
+        }
+      },
+      "id": "route-by-platform",
+      "name": "Route by Platform",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.1,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "url": "=https://boards-api.greenhouse.io/v1/boards/{{$json.ats_slug}}/jobs?content=true",
+        "options": { "timeout": 30000 }
+      },
+      "id": "fetch-greenhouse",
+      "name": "Fetch Greenhouse Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.ashbyhq.com/posting-api/job-board/{{$json.ats_slug}}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "fetch-ashby",
+      "name": "Fetch Ashby Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nconst companyMap = {};\nfor (const ei of $('Expand ATS Platforms').all()) {\n  companyMap[ei.json.ats_slug] = { company_id: ei.json.company_id, company_name: ei.json.company_name };\n}\n\nfor (const item of items) {\n  const response = item.json;\n  let jobs = [];\n  \n  const now = new Date();\n  const day = now.getDay();\n  const mondayOffset = day === 0 ? 6 : day - 1;\n  const weekStart = new Date(now);\n  weekStart.setDate(now.getDate() - mondayOffset);\n  weekStart.setHours(0, 0, 0, 0);\n  \n  if (response.jobs && Array.isArray(response.jobs)) {\n    const firstJob = response.jobs[0];\n    if (firstJob && firstJob.absolute_url) {\n      const slug = (firstJob.absolute_url.match(/boards\\.greenhouse\\.io\\/([^\\/]+)/) || [])[1] || '';\n      const co = companyMap[slug] || {};\n      jobs = response.jobs.map(j => ({\n        company_id: co.company_id,\n        company_name: co.company_name,\n        ats_platform: 'greenhouse',\n        job_id: String(j.id),\n        title: j.title,\n        location: j.location?.name || null,\n        url: j.absolute_url,\n        description: (j.content || '').replace(/<[^>]*>/g, '').substring(0, 1500),\n        updated_at: j.updated_at\n      }));\n    } else if (firstJob && firstJob.jobUrl) {\n      const slug = (firstJob.jobUrl.match(/jobs\\.ashbyhq\\.com\\/([^\\/]+)/) || [])[1] || '';\n      const co = companyMap[slug] || {};\n      jobs = response.jobs.map(j => ({\n        company_id: co.company_id,\n        company_name: co.company_name,\n        ats_platform: 'ashby',\n        job_id: String(j.id),\n        title: j.title,\n        location: j.locationName || null,\n        url: j.jobUrl,\n        description: (j.descriptionPlain || '').substring(0, 1500),\n        updated_at: j.updatedAt || j.publishedDate\n      }));\n    }\n  }\n  \n  for (const job of jobs) {\n    if (!job.updated_at) continue;\n    const jobDate = new Date(job.updated_at);\n    if (jobDate >= weekStart) {\n      results.push({ json: job });\n    }\n  }\n}\n\nreturn results;"
+      },
+      "id": "normalize-jobs",
+      "name": "Normalize & Filter This Week",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": { "reset": false }
+      },
+      "id": "split-classify",
+      "name": "Split for Classify",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen-2.5-72b-instruct",
+        "options": { "temperature": 0.3, "maxTokens": 50 }
+      },
+      "id": "classifier-llm",
+      "name": "Classifier LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [1650, 580],
+      "credentials": { "openAiApi": { "id": "openrouter-openai-api", "name": "OpenRouter (OpenAI-compatible)" } }
+    },
+    {
+      "parameters": {
+        "options": {},
+        "promptType": "define",
+        "text": "=You are a precise job classifier for B2B SaaS tools. Classify this job:\n\nTitle: {{ $json.title }}\nDescription: {{ $json.description.substring(0, 500) }}\n\nCategories:\n- infrastructure: DevOps, SRE, Platform Engineer, Cloud Engineer, Infrastructure\n- security_compliance: Security Engineer, AppSec, CISO, Compliance, SOC2/HIPAA roles\n- data_ai: Data Engineer, ML Engineer, AI/ML, Analytics\n- go_to_market: Sales Engineer, SDR, Marketing, Growth\n- leadership: VP, Director, Head of X, CTO, CEO\n- irrelevant: Designer, HR, Finance, Admin\n\nOutput ONE word only (e.g., infrastructure). No explanation."
+      },
+      "id": "ai-classify",
+      "name": "AI Classify One Job",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1650, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $('Split for Classify').item.json;\nlet category = 'unknown';\n\ntry {\n  const raw = $input.item.json.output || $input.item.json.text || '';\n  const cleaned = String(raw).toLowerCase().trim();\n  const valid = ['infrastructure', 'security_compliance', 'data_ai', 'go_to_market', 'leadership', 'irrelevant'];\n  \n  if (valid.includes(cleaned)) {\n    category = cleaned;\n  } else {\n    const match = cleaned.match(/(infrastructure|security_compliance|data_ai|go_to_market|leadership|irrelevant)/);\n    if (match) {\n      category = match[1];\n    }\n  }\n} catch (e) {}\n\nreturn { json: { ...job, category } };"
+      },
+      "id": "merge-category",
+      "name": "Merge Category",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 400]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": { "reset": false }
+      },
+      "id": "split-signal",
+      "name": "Split for Signal Processing",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [2050, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT COUNT(*) as count FROM signals WHERE company_id = '{{ $('Split for Signal Processing').item.json.company_id }}' AND signal_type = 'hiring' AND signal_title = '{{ $('Split for Signal Processing').item.json.title }}' AND DATE(signal_date) = CURRENT_DATE",
+        "options": {}
+      },
+      "id": "check-duplicate",
+      "name": "Check Duplicate Signal",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2250, 400],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.count }}", "operation": "equals", "value2": "0" }]
+        }
+      },
+      "id": "is-new-signal",
+      "name": "Is New Signal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2450, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO signals (company_id, company_name, signal_type, signal_title, signal_url, signal_date, signal_category, raw_summary) VALUES ('{{ $('Split for Signal Processing').item.json.company_id }}'::uuid, '{{ $('Split for Signal Processing').item.json.company_name }}', 'hiring', '{{ $('Split for Signal Processing').item.json.title }}', '{{ $('Split for Signal Processing').item.json.url }}', current_date, '{{ $('Split for Signal Processing').item.json.category }}', '{{ $('Split for Signal Processing').item.json.title }}({{ $('Split for Signal Processing').item.json.location || \"Remote\" }})') ON CONFLICT (company_id, signal_type, signal_title, signal_date) DO NOTHING",
+        "options": {}
+      },
+      "id": "insert-signal",
+      "name": "Insert Signal to Supabase",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2650, 300],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    }
+  ],
+  "connections": {
+    "Schedule: Daily 8am": { "main": [[{ "node": "Fetch Active Companies", "type": "main", "index": 0 }]] },
+    "Manual Trigger": { "main": [[{ "node": "Fetch Active Companies", "type": "main", "index": 0 }]] },
+    "Fetch Active Companies": { "main": [[{ "node": "Expand ATS Platforms", "type": "main", "index": 0 }]] },
+    "Expand ATS Platforms": { "main": [[{ "node": "Route by Platform", "type": "main", "index": 0 }]] },
+    "Route by Platform": {
+      "main": [
+        [{ "node": "Fetch Greenhouse Jobs", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Ashby Jobs", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Greenhouse Jobs": { "main": [[{ "node": "Normalize & Filter This Week", "type": "main", "index": 0 }]] },
+    "Fetch Ashby Jobs": { "main": [[{ "node": "Normalize & Filter This Week", "type": "main", "index": 0 }]] },
+    "Normalize & Filter This Week": { "main": [[{ "node": "Split for Classify", "type": "main", "index": 0 }]] },
+    "Split for Classify": {
+      "main": [
+        [{ "node": "Split for Signal Processing", "type": "main", "index": 0 }],
+        [{ "node": "AI Classify One Job", "type": "main", "index": 0 }]
+      ]
+    },
+    "Classifier LLM": {
+      "ai_languageModel": [[{ "node": "AI Classify One Job", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "AI Classify One Job": { "main": [[{ "node": "Merge Category", "type": "main", "index": 0 }]] },
+    "Merge Category": { "main": [[{ "node": "Split for Classify", "type": "main", "index": 0 }]] },
+    "Split for Signal Processing": {
+      "main": [
+        [],
+        [{ "node": "Check Duplicate Signal", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Duplicate Signal": { "main": [[{ "node": "Is New Signal?", "type": "main", "index": 0 }]] },
+    "Is New Signal?": {
+      "main": [
+        [{ "node": "Insert Signal to Supabase", "type": "main", "index": 0 }],
+        [{ "node": "Split for Signal Processing", "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Signal to Supabase": { "main": [[{ "node": "Split for Signal Processing", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false
+}
+
