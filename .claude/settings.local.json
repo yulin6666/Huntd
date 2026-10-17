@@ -88,7 +88,16 @@
       "WebFetch(domain:www.sec.gov)",
       "WebFetch(domain:apify.com)",
       "WebFetch(domain:www.crunchbase.com)",
-      "WebFetch(domain:efts.sec.gov)"
+      "WebFetch(domain:efts.sec.gov)",
+      "Bash(git remote:*)",
+      "WebFetch(domain:www.anthropic.com)",
+      "Bash(find /Users/lindediannao/Documents/project/Huntd/huntd-app/supabase/migrations -type f -name *.sql)",
+      "Bash(rm /Users/lindediannao/Documents/project/Huntd/huntd-app/app/api/executive-candidates/[id]/route.ts)",
+      "Bash(rmdir /Users/lindediannao/Documents/project/Huntd/huntd-app/app/api/executive-candidates/[id]/)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -f /Users/lindediannao/Documents/project/Huntd/huntd-app/supabase/migrations/005_executive_candidates_draft.sql 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT id, name FROM global_companies WHERE is_active = true LIMIT 5;\" 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd <<'SQL'\nINSERT INTO executive_candidates_draft \\(company_id, company_name, person_name, title, action, source_title, pub_date\\) VALUES\n  \\('f9ff4dc2-8e3a-4a4b-a895-88982e04fcbd', 'Anthropic', 'Jane Smith', 'VP of Engineering', 'joined', 'Anthropic hires Jane Smith as VP of Engineering', '2026-10-15'\\),\n  \\('f9ff4dc2-8e3a-4a4b-a895-88982e04fcbd', 'Anthropic', 'Tom Lee', 'CTO', 'appointed', 'Anthropic appoints Tom Lee as new CTO', '2026-10-14'\\),\n  \\('f9ff4dc2-8e3a-4a4b-a895-88982e04fcbd', 'Anthropic', 'Sarah Chen', 'Head of Infrastructure', 'joined', 'Sarah Chen joins Anthropic infrastructure team', '2026-10-12'\\),\n  \\('6beb8dd0-fc88-4121-9e71-0465bf112e7f', 'Figma', 'Mike Johnson', 'CISO', 'appointed', 'Figma names Mike Johnson as CISO', '2026-10-13'\\)\nON CONFLICT DO NOTHING;\nSQL)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT company_name, person_name, title FROM executive_candidates_draft ORDER BY company_name;\" 2>&1)"
     ]
   }
 }

@@ -1,0 +1,148 @@
+{
+  "name": "Huntd - Executive Enrich (03b)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "executive-enrich",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 400],
+      "webhookId": "executive-enrich"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ec.id AS candidate_id, ec.company_id, ec.company_name, ec.person_name, ec.title, ec.action, ec.source_title, ec.pub_date FROM executive_candidates ec WHERE ec.status = 'approved' AND NOT EXISTS (SELECT 1 FROM executive_profiles ep WHERE ep.company_id = ec.company_id AND ep.person_name = ec.person_name AND ep.title = ec.title)",
+        "options": {}
+      },
+      "id": "fetch-approved",
+      "name": "Fetch Approved Candidates",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [450, 400],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": { "reset": false }
+      },
+      "id": "split-linkedin",
+      "name": "Split for LinkedIn Enrich",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ q: $json.person_name + ' ' + $json.company_name + ' site:linkedin.com/in/', num: 3 }) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "search-linkedin",
+      "name": "Search LinkedIn (Serper)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "serper-header-auth",
+          "name": "Serper API (Header Auth)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge LinkedIn search results with candidate data\nconst exec = $('Split for LinkedIn Enrich').item.json;\nconst serperResponse = $input.item.json;\n\nlet linkedin_url = null;\nlet linkedin_snippet = null;\n\nif (serperResponse && serperResponse.organic && Array.isArray(serperResponse.organic)) {\n  const topResult = serperResponse.organic[0];\n  if (topResult && topResult.link && topResult.link.includes('linkedin.com/in/')) {\n    linkedin_url = topResult.link;\n    linkedin_snippet = (topResult.snippet || '').substring(0, 500);\n  }\n}\n\nreturn [{ json: { ...exec, linkedin_url, linkedin_snippet } }];"
+      },
+      "id": "merge-linkedin",
+      "name": "Merge LinkedIn Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO executive_profiles (company_id, company_name, person_name, title, action, linkedin_url, linkedin_snippet, source_title, pub_date) VALUES ('{{ $json.company_id }}'::uuid, '{{ $json.company_name }}', '{{ $json.person_name }}', '{{ $json.title }}', '{{ $json.action }}', '{{ $json.linkedin_url || '' }}', '{{ ($json.linkedin_snippet || '').substring(0, 500) }}', '{{ $json.source_title }}', '{{ $json.pub_date }}') ON CONFLICT (company_id, person_name, title) DO UPDATE SET action = EXCLUDED.action, linkedin_url = COALESCE(EXCLUDED.linkedin_url, executive_profiles.linkedin_url), linkedin_snippet = COALESCE(EXCLUDED.linkedin_snippet, executive_profiles.linkedin_snippet), detected_at = now()",
+        "options": {}
+      },
+      "id": "insert-profile",
+      "name": "Insert Executive Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1250, 400],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO signals (company_id, company_name, signal_type, signal_title, signal_url, signal_date, signal_category, raw_summary) VALUES ('{{ $json.company_id }}'::uuid, '{{ $json.company_name }}', 'executive', '{{ $json.person_name }} - {{ $json.title }} ({{ $json.action }})', '{{ $json.linkedin_url || '' }}', current_date, 'leadership', '{{ $json.source_title }}') ON CONFLICT (company_id, signal_type, signal_title, signal_date) DO NOTHING",
+        "options": {}
+      },
+      "id": "insert-signal",
+      "name": "Insert Signal Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1450, 400],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE executive_candidates SET status = 'enriched' WHERE id = '{{ $json.candidate_id }}'::uuid",
+        "options": {}
+      },
+      "id": "mark-enriched",
+      "name": "Mark Candidate Enriched",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1650, 400],
+      "credentials": { "postgres": { "id": "supabase-db", "name": "Supabase PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message: 'Executive enrich completed' }) }}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1050, 600]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": { "main": [[{ "node": "Fetch Approved Candidates", "type": "main", "index": 0 }]] },
+    "Fetch Approved Candidates": { "main": [[{ "node": "Split for LinkedIn Enrich", "type": "main", "index": 0 }]] },
+    "Split for LinkedIn Enrich": {
+      "main": [
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }],
+        [{ "node": "Search LinkedIn (Serper)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Search LinkedIn (Serper)": { "main": [[{ "node": "Merge LinkedIn Data", "type": "main", "index": 0 }]] },
+    "Merge LinkedIn Data": { "main": [[{ "node": "Insert Executive Profile", "type": "main", "index": 0 }]] },
+    "Insert Executive Profile": { "main": [[{ "node": "Insert Signal Record", "type": "main", "index": 0 }]] },
+    "Insert Signal Record": { "main": [[{ "node": "Mark Candidate Enriched", "type": "main", "index": 0 }]] },
+    "Mark Candidate Enriched": { "main": [[{ "node": "Split for LinkedIn Enrich", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false
+}
