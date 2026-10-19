@@ -217,6 +217,18 @@ export default function ExecutiveReview() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <a
+            href="/executives"
+            className="px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition"
+          >
+            Enriched
+          </a>
+          <a
+            href="/"
+            className="px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition"
+          >
+            Signals
+          </a>
           <button
             onClick={toggleAll}
             className="px-3 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition"

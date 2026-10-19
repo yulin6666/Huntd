@@ -97,7 +97,24 @@
       "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -f /Users/lindediannao/Documents/project/Huntd/huntd-app/supabase/migrations/005_executive_candidates_draft.sql 2>&1)",
       "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT id, name FROM global_companies WHERE is_active = true LIMIT 5;\" 2>&1)",
       "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd <<'SQL'\nINSERT INTO executive_candidates_draft \\(company_id, company_name, person_name, title, action, source_title, pub_date\\) VALUES\n  \\('f9ff4dc2-8e3a-4a4b-a895-88982e04fcbd', 'Anthropic', 'Jane Smith', 'VP of Engineering', 'joined', 'Anthropic hires Jane Smith as VP of Engineering', '2026-10-15'\\),\n  \\('f9ff4dc2-8e3a-4a4b-a895-88982e04fcbd', 'Anthropic', 'Tom Lee', 'CTO', 'appointed', 'Anthropic appoints Tom Lee as new CTO', '2026-10-14'\\),\n  \\('f9ff4dc2-8e3a-4a4b-a895-88982e04fcbd', 'Anthropic', 'Sarah Chen', 'Head of Infrastructure', 'joined', 'Sarah Chen joins Anthropic infrastructure team', '2026-10-12'\\),\n  \\('6beb8dd0-fc88-4121-9e71-0465bf112e7f', 'Figma', 'Mike Johnson', 'CISO', 'appointed', 'Figma names Mike Johnson as CISO', '2026-10-13'\\)\nON CONFLICT DO NOTHING;\nSQL)",
-      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT company_name, person_name, title FROM executive_candidates_draft ORDER BY company_name;\" 2>&1)"
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT company_name, person_name, title FROM executive_candidates_draft ORDER BY company_name;\" 2>&1)",
+      "Bash(psql:*)",
+      "Bash(PGPASSWORD=password psql postgresql://root@localhost:5433/huntd -c \"SELECT person_name, title, company_name FROM executive_profiles ORDER BY person_name;\")",
+      "Bash(PGPASSWORD=password psql postgresql://root@localhost:5433/huntd -c \"DELETE FROM executive_profiles WHERE person_name NOT IN \\('Dario Amodei', 'Kris Rasmussen'\\);\")",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -f /Users/lindediannao/Documents/project/Huntd/huntd-app/supabase/migrations/006_executive_enrich_columns.sql)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"\\\\d executive_profiles\"、)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"CREATE INDEX IF NOT EXISTS idx_profiles_not_enriched ON executive_profiles \\(detected_at DESC\\) WHERE enriched_at IS NULL;\")",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"\\\\d executive_profiles\" 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT column_name FROM information_schema.columns WHERE table_name = 'executive_profiles' AND column_name = 'enrichment_data';\" 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"ALTER TABLE executive_profiles ADD COLUMN IF NOT EXISTS enrichment_data jsonb DEFAULT '[]'::jsonb;\" 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"\\\\d executive_profiles\")",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT id, person_name, enriched_at FROM executive_profiles LIMIT 5;\" 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT id, company_name, person_name, title, linkedin_url, enriched_at FROM executive_profiles;\" 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"ALTER TABLE executive_profiles ADD COLUMN IF NOT EXISTS twitter_url text, ADD COLUMN IF NOT EXISTS github_url text, ADD COLUMN IF NOT EXISTS blog_url text;\" 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT id, person_name, enriched_at, enrichment_data IS NOT NULL as has_data FROM executive_profiles;\" 2>&1)",
+      "Bash(PGPASSWORD=password psql -h localhost -p 5433 -U root -d huntd -c \"SELECT id, person_name, enriched_at FROM executive_profiles WHERE enriched_at IS NOT NULL;\" 2>&1)",
+      "WebFetch(domain:botmemo.com)",
+      "WebFetch(domain:prospeo.io)"
     ]
   }
 }

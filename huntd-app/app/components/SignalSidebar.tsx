@@ -77,9 +77,25 @@ export default function SignalSidebar({
         ))}
       </nav>
 
-      <div className="p-4 border-t border-gray-800 text-xs text-gray-500">
-        <div className="mb-1">Sources: ATS APIs, RSS, LinkedIn</div>
-        <div>Signals refresh daily</div>
+      <div className="p-4 border-t border-gray-800 space-y-1">
+        <a
+          href="/executives"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-gray-800 transition w-full"
+        >
+          <span>👤</span>
+          <span>Executives</span>
+        </a>
+        <a
+          href="/executive-review"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-gray-300 hover:bg-gray-800 transition w-full"
+        >
+          <span>📋</span>
+          <span>Review Queue</span>
+        </a>
+        <div className="px-4 pt-2 text-xs text-gray-500">
+          <div className="mb-1">Sources: ATS APIs, RSS, LinkedIn</div>
+          <div>Signals refresh daily</div>
+        </div>
       </div>
     </div>
   )
