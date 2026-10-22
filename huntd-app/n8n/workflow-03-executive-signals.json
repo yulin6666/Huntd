@@ -1,0 +1,523 @@
+{
+  "name": "Huntd - Executive Signals (03)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24,
+              "triggerAtHour": 10
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule: Daily 10am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, domain FROM global_companies WHERE is_active = true ORDER BY name"
+      },
+      "id": "fetch-companies",
+      "name": "Fetch Active Companies",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        450,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "supabase-db",
+          "name": "Supabase PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://news.google.com/rss/search?q=%22{{ encodeURIComponent($json.name) }}%22+%22VP+of+Engineering%22+OR+%22Head+of+DevOps%22+OR+%22CISO%22+OR+%22CTO%22+OR+%22Chief+Technology+Officer%22+OR+%22Chief+Information+Security+Officer%22+OR+%22joins+as%22+OR+%22appointed%22+OR+%22hired%22+OR+%22names%22&hl=en-US&gl=US&ceid=US:en",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-google-news",
+      "name": "Fetch Google News RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        650,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse RSS XML for all companies, pre-filter for executive role keywords only\nconst items = $input.all();\nconst companies = $('Fetch Active Companies').all();\nconst results = [];\n\nconst EXEC_KEYWORDS = [\n  'cto', 'chief technology officer',\n  'ciso', 'chief information security officer',\n  'vp of engineering', 'vp engineering', 'vice president of engineering',\n  'head of devops', 'head of engineering', 'head of infrastructure'\n];\n\nfor (let i = 0; i < items.length; i++) {\n  const xml = items[i].json.data || items[i].json.body || '';\n  const company = companies[i]?.json || {};\n\n  const titleRegex = /<item>\\s*<title>([^<]+)<\\/title>.*?<pubDate>([^<]*)<\\/pubDate>/gs;\n  const headlines = [];\n  let match;\n\n  while ((match = titleRegex.exec(xml)) !== null) {\n    const title = match[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, \"'\").replace(/&quot;/g, '\"');\n    const pubDate = match[2];\n    const lower = title.toLowerCase();\n    if (EXEC_KEYWORDS.some(kw => lower.includes(kw))) {\n      headlines.push(`[${pubDate}] ${title}`);\n    }\n  }\n\n  if (headlines.length > 0) {\n    results.push({ json: {\n      company_id: company.id,\n      company_name: company.name,\n      headlines: headlines.join('\\n')\n    }});\n  }\n}\n\nreturn results;"
+      },
+      "id": "parse-filter-rss",
+      "name": "Parse & Filter RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        850,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "split-ai-extract",
+      "name": "Split for AI Extract",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1050,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen-2.5-72b-instruct",
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 2000
+        }
+      },
+      "id": "extract-llm",
+      "name": "Extract LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        580
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openrouter-openai-api",
+          "name": "OpenRouter (OpenAI-compatible)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {},
+        "promptType": "define",
+        "text": "=Extract executive leadership information from news headlines about {{ $json.company_name }}.\n\nHeadlines:\n{{ $json.headlines }}\n\n**Task:**\nIdentify individuals who DIRECTLY WORK AT {{ $json.company_name }} in senior technical, security, or leadership roles. Look for C-level executives (CTO, CISO, CIO, CPO, etc.), VPs, Heads of departments, General Counsel, and other senior leadership positions.\n\n**STRICT FILTERING RULES (apply these FIRST before extracting):**\n\n1. The person MUST be employed by {{ $json.company_name }}. If the headline says \"X, CTO of CompanyB\" or \"CompanyB's CTO\", that person works at CompanyB, NOT {{ $json.company_name }} — SKIP them.\n2. If a headline mentions multiple companies, only extract people whose role is explicitly tied to {{ $json.company_name }}.\n3. Do NOT extract people who are described as working at, leading, or holding titles at any company other than {{ $json.company_name }}.\n4. If there is ANY ambiguity about whether the person works at {{ $json.company_name }}, SKIP them.\n5. SKIP former/ex-/departed/leaving/stepping down executives.\n6. SKIP if no person name is mentioned (only \"Company CTO\" without naming who).\n7. person_name MUST be a real human full name (e.g. \"Jane Smith\", \"Jason Doe\"). It must NOT contain any company name, product name, or job title words (CEO, CTO, VP, Head, Engineer, etc.). If the headline only mentions a role without a real name, return [] — do NOT use the role description as person_name.\n8. \"X CTO joins {{ $json.company_name }}\" or \"X's CTO latest to join {{ $json.company_name }}\" — these describe someone LEAVING company X. The person's current employer is X, not {{ $json.company_name }} yet. SKIP unless the headline explicitly names the person AND states they have ALREADY joined.\n\n**Examples of what to SKIP:**\n- \"CompanyB CTO joins [target company] board\" → CompanyB CTO does NOT work at [target company], SKIP\n- \"CompanyC's VP discusses partnership with [target company]\" → CompanyC employee, SKIP\n- \"[Target company] partners with firm led by former CompanyD executive\" → CompanyD executive, SKIP\n- \"Workday CTO Leaves for [Target company]\" → No real person name, only \"Workday CTO\". SKIP\n- \"Microsoft's Azure Core CTO latest to join [Target company]\" → No real person name, only a title. SKIP\n- \"CompanyE CTO John Lee joins [Target company]\" → person is John Lee, but he is currently CompanyE's CTO (not yet {{ $json.company_name }}). SKIP unless headline says he has already started.\n\n**Examples of what to EXTRACT (when target company is [TargetCo]):**\n- \"[TargetCo] appoints Jane Smith as CTO\" → Jane Smith works AT [TargetCo], EXTRACT\n- \"Jason Doe, CISO of [TargetCo], speaks at conference\" → works AT [TargetCo], EXTRACT\n- \"Alice Lee, CEO of [TargetCo], announces new product\" → works AT [TargetCo], EXTRACT\n\n**Pattern Recognition:**\n\n1. Appointment announcements (action: \"appointed\"):\n   - {{ $json.company_name }} names/hires/appoints person as role\n   - Person joins {{ $json.company_name }} as role\n\n2. Active role references (action: \"current\"):\n   - Person, [Title] of {{ $json.company_name }}, does/says something\n   - {{ $json.company_name }}'s [Title] does/says something\n\n**Output Format:**\nReturn a JSON array containing up to 5 unique executives (no markdown, no explanation). If no qualified executives found, return []\n\nSchema:\n[{\n  \"person_name\": \"Full Name\",\n  \"title\": \"exact title from headline\",\n  \"action\": \"appointed\" or \"current\",\n  \"source_title\": \"original headline text\",\n  \"pub_date\": \"date string from headline\"\n}]"
+      },
+      "id": "ai-extract",
+      "name": "AI Extract Target Executives",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1250,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI JSON output, expand into individual candidate items\nconst companyData = $('Split for AI Extract').item.json;\nlet raw = $input.item.json.output || $input.item.json.text || '[]';\n\nraw = raw.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n\nlet executives = [];\ntry {\n  executives = JSON.parse(raw);\n} catch (e) {\n  // Try extracting array\n  const arrMatch = raw.match(/\\[.*\\]/s);\n  if (arrMatch) {\n    try {\n      executives = JSON.parse(arrMatch[0]);\n    } catch (e2) {\n      // JSON truncated, try fixing\n      let fixed = arrMatch[0].trim();\n      if (!fixed.endsWith(']')) {\n        if (!fixed.endsWith('}')) fixed += '\"}';\n        fixed += ']';\n      }\n      try { executives = JSON.parse(fixed); } catch (e3) {}\n    }\n  }\n}\n\nif (!Array.isArray(executives) || executives.length === 0) {\n  // Return empty marker to keep loop alive\n  return [{ json: { _skip: true, company_id: companyData.company_id } }];\n}\n\nconst results = executives.map(exec => ({\n  json: {\n    company_id: companyData.company_id,\n    company_name: companyData.company_name,\n    person_name: (exec.person_name || '').replace(/'/g, \"''\"),\n    title: (exec.title || '').replace(/'/g, \"''\"),\n    action: exec.action || 'appointed',\n    source_title: (exec.source_title || '').replace(/'/g, \"''\"),\n    pub_date: exec.pub_date || '',\n    _skip: false\n  }\n})).filter(item => {\n  const name = item.json.person_name.toLowerCase();\n  const TITLE_WORDS = ['cto', 'ceo', 'cfo', 'cio', 'ciso', 'cpo', 'coo', 'vp ', 'vice president', 'head of', 'director', 'general counsel', 'president', 'chief'];\n  const COMPANY_INDICATORS = [\"'s \", \"microsoft\", \"google\", \"amazon\", \"workday\", \"salesforce\", \"oracle\", \"meta\", \"apple\", \"azure\"];\n  if (TITLE_WORDS.some(t => name.includes(t))) return false;\n  if (COMPANY_INDICATORS.some(c => name.includes(c))) return false;\n  if (name.trim().split(/\\s+/).length < 2) return false;\n  return true;\n});\n\nif (results.length === 0) {\n  return [{ json: { _skip: true, company_id: companyData.company_id } }];\n}\nreturn results;"
+      },
+      "id": "parse-ai-output",
+      "name": "Parse AI to Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT CASE WHEN '{{ $json.person_name }}' = '' THEN 1 ELSE (SELECT COUNT(*) FROM executive_profiles WHERE company_id = '{{ $json.company_id }}'::uuid AND person_name = '{{ $json.person_name }}' AND title = '{{ $json.title }}') END as count",
+        "options": {}
+      },
+      "id": "check-duplicate",
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1650,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "supabase-db",
+          "name": "Supabase PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.count }}",
+              "operation": "equals",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "id": "is-new-exec",
+      "name": "Is New Executive?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO executive_profiles (company_id, company_name, person_name, title, action, source_title, pub_date) VALUES ('{{ $('Parse AI to Candidates').item.json.company_id }}'::uuid, '{{ $('Parse AI to Candidates').item.json.company_name }}', '{{ $('Parse AI to Candidates').item.json.person_name }}', '{{ $('Parse AI to Candidates').item.json.title }}', '{{ $('Parse AI to Candidates').item.json.action }}', '{{ $('Parse AI to Candidates').item.json.source_title }}', '{{ $('Parse AI to Candidates').item.json.pub_date }}') ON CONFLICT (company_id, person_name, title) DO NOTHING RETURNING id, company_id, company_name, person_name, title",
+        "options": {}
+      },
+      "id": "insert-profile",
+      "name": "Insert to executive_profiles",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2050,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "supabase-db",
+          "name": "Supabase PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ q: $json.person_name + \" \" + $json.company_name + \" linkedin OR twitter OR speaker OR conference OR article\", num: 15 }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "search-exec-info",
+      "name": "Search Executive Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2250,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "serper-header-auth",
+          "name": "Serper API (Header Auth)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE executive_profiles SET\n  linkedin_url = '{{ $json.linkedin_url }}',\n  linkedin_snippet = '{{ $json.linkedin_snippet }}',\n  twitter_url = '{{ $json.twitter_url }}',\n  github_url = '{{ $json.github_url }}',\n  blog_url = '{{ $json.blog_url }}',\n  enrichment_data = '{{ $json.enrichment_data }}'::jsonb\nWHERE id = '{{ $json.id }}';",
+        "options": {}
+      },
+      "name": "Update Executive Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3050,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "supabase-db",
+          "name": "Supabase PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen-2.5-72b-instruct",
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 3000
+        }
+      },
+      "id": "enrich-llm",
+      "name": "Enrich LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        500
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openrouter-openai-api",
+          "name": "OpenRouter (OpenAI-compatible)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {},
+        "promptType": "define",
+        "text": "=You are analyzing Google search results to extract social profiles and public activities for an executive.\n\nPerson: {{ $('Insert to executive_profiles').item.json.person_name }}\nCompany: {{ $('Insert to executive_profiles').item.json.company_name }}\n\n**Search Results:**\n{{ JSON.stringify($('Search Executive Info').item.json.organic || [], null, 2) }}\n\n**Task 1 — Extract Social Profiles:**\nFrom the search results, find the MOST RELEVANT profile URLs for this specific person at this specific company:\n- linkedin_url: a linkedin.com/in/ URL belonging to this person (not a company page, search page, or different person)\n- linkedin_snippet: the snippet text from the LinkedIn search result\n- twitter_url: a twitter.com or x.com profile URL (not a tweet, search page, or /i/ URL)\n- github_url: a github.com user profile URL (not a /topics/ or /search/ page)\n- blog_url: a medium.com or substack.com URL belonging to this person\nReturn empty string \"\" for any profile not found. Be strict about matching — only return URLs that clearly belong to this specific person.\n\n**Task 2 — Extract Activities & Content:**\nFrom the SAME search results, extract notable public activities. Rules:\n- EXCLUDE any social profile URLs (linkedin.com, twitter.com, x.com, github.com)\n- Categorize each as \"event\" (speaker, conference, podcast, talk, panel, summit, webinar) or \"content\" (article, blog post, interview, video)\n- Include: type, title, url, snippet\n- Return up to 10 most relevant items\n\n**Output (strict JSON only, no markdown fences, no explanation):**\n{\n  \"social\": {\n    \"linkedin_url\": \"\",\n    \"linkedin_snippet\": \"\",\n    \"twitter_url\": \"\",\n    \"github_url\": \"\",\n    \"blog_url\": \"\"\n  },\n  \"activities\": [\n    { \"type\": \"event\", \"title\": \"...\", \"url\": \"...\", \"snippet\": \"...\" }\n  ]\n}"
+      },
+      "id": "ai-parse-enrichment",
+      "name": "AI Parse Enrichment",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        2650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI enrichment output into structured data for DB updates\nconst items = $input.all();\nconst profiles = $('Insert to executive_profiles').all();\n\nconst sq = (v) => (v && typeof v === 'string') ? v.replace(/'/g, \"''\") : '';\nconst sqj = (v) => {\n  try {\n    const s = typeof v === 'string' ? v : JSON.stringify(v || []);\n    return s.replace(/'/g, \"''\");\n  } catch(e) { return '[]'; }\n};\n\nconst results = [];\nfor (let i = 0; i < items.length; i++) {\n  const profile = profiles[i]?.json || {};\n  let raw = items[i].json.output || items[i].json.text || '{}';\n  raw = raw.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n\n  let parsed = {};\n  try {\n    parsed = JSON.parse(raw);\n  } catch(e) {\n    const match = raw.match(/\\{[\\s\\S]*\\}/);\n    if (match) try { parsed = JSON.parse(match[0]); } catch(e2) {}\n  }\n\n  const social = parsed.social || {};\n  const activities = parsed.activities || [];\n\n  results.push({\n    json: {\n      id: profile.id,\n      person_name: profile.person_name,\n      company_name: profile.company_name,\n      linkedin_url: sq(social.linkedin_url),\n      linkedin_snippet: sq(social.linkedin_snippet),\n      twitter_url: sq(social.twitter_url),\n      github_url: sq(social.github_url),\n      blog_url: sq(social.blog_url),\n      enrichment_data: sqj(activities)\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "format-enrichment",
+      "name": "Format Enrichment Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2850,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule: Daily 10am": {
+      "main": [
+        [
+          {
+            "node": "Fetch Active Companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Active Companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Active Companies": {
+      "main": [
+        [
+          {
+            "node": "Fetch Google News RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Google News RSS": {
+      "main": [
+        [
+          {
+            "node": "Parse & Filter RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Filter RSS": {
+      "main": [
+        [
+          {
+            "node": "Split for AI Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split for AI Extract": {
+      "main": [
+        [
+          {
+            "node": "AI Extract Target Executives",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Extract LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Extract Target Executives",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extract Target Executives": {
+      "main": [
+        [
+          {
+            "node": "Parse AI to Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI to Candidates": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Is New Executive?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New Executive?": {
+      "main": [
+        [
+          {
+            "node": "Insert to executive_profiles",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Split for AI Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert to executive_profiles": {
+      "main": [
+        [
+          {
+            "node": "Search Executive Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Executive Profile": {
+      "main": [
+        [
+          {
+            "node": "Split for AI Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Parse Enrichment",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Parse Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Format Enrichment Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Enrichment Output": {
+      "main": [
+        [
+          {
+            "node": "Update Executive Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Executive Info": {
+      "main": [
+        [
+          {
+            "node": "AI Parse Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false
+}
